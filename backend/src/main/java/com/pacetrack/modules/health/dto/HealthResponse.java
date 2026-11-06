@@ -19,3 +19,4 @@ public record HealthResponse(
         return new HealthResponse("UP", "pacetrack-backend", version, environment, Instant.now(), details);
     }
 }
+

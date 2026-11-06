@@ -38,3 +38,4 @@ export async function fetchBackendHealth(): Promise<HealthData> {
     throw new Error('Unknown network error occurred');
   }
 }
+

@@ -24,3 +24,4 @@ public record ErrorResponse(
         return of(status, error, message, path, List.of());
     }
 }
+

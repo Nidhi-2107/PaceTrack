@@ -33,3 +33,4 @@ class HealthControllerTest {
                 .andExpect(jsonPath("$.data.version").value("1.0.0"));
     }
 }
+

@@ -10,3 +10,4 @@ public class PaceTrackApplication {
         SpringApplication.run(PaceTrackApplication.class, args);
     }
 }
+

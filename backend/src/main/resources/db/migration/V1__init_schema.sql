@@ -16,3 +16,4 @@ CREATE TABLE IF NOT EXISTS system_metadata (
 INSERT INTO system_metadata (id, key_name, key_value)
 VALUES ('meta_init_001', 'system_status', 'INITIALIZED')
 ON CONFLICT (key_name) DO NOTHING;
+

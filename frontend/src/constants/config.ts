@@ -18,3 +18,4 @@ export const Config = {
   version: '1.0.0',
   apiBaseUrl: getDevApiUrl(),
 };
+

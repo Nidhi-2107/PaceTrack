@@ -14,3 +14,4 @@ export const Colors = {
   error: '#EF4444',
   white: '#FFFFFF',
 };
+

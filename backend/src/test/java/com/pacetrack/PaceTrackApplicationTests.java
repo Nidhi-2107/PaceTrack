@@ -13,3 +13,4 @@ class PaceTrackApplicationTests {
         // Verifies Spring context initialization with active test profile
     }
 }
+

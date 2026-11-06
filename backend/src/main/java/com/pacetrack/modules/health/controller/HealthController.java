@@ -24,3 +24,4 @@ public class HealthController {
         return ResponseEntity.ok(ApiResponse.success(health, "PaceTrack backend is healthy and running"));
     }
 }
+

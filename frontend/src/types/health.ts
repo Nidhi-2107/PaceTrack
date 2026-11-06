@@ -26,3 +26,4 @@ export interface SystemHealthState {
   error: string | null;
   lastChecked: Date | null;
 }
+

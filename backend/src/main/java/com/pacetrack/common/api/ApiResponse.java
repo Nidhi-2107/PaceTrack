@@ -24,3 +24,4 @@ public record ApiResponse<T>(
         return new ApiResponse<>(false, message, null, Instant.now());
     }
 }
+
