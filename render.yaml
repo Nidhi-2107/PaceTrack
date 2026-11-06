@@ -1,0 +1,40 @@
+# PaceTrack Render Infrastructure as Code Blueprint
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: pacetrack-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    region: oregon
+    healthCheckPath: /api/v1/health
+    envVars:
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod
+      - key: DB_URL
+        fromDatabase:
+          name: pacetrack-db
+          property: connectionString
+      - key: DB_USERNAME
+        fromDatabase:
+          name: pacetrack-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: pacetrack-db
+          property: password
+      - key: JWT_SECRET
+        generateValue: true
+      - key: JWT_EXPIRATION_MS
+        value: "86400000"
+      - key: CORS_ALLOWED_ORIGINS
+        value: "https://pacetrack.vercel.app,http://localhost:8081,http://localhost:3000"
+
+databases:
+  - name: pacetrack-db
+    databaseName: pacetrack
+    user: pacetrack_user
+    plan: starter
+    region: oregon
+    postgresMajorVersion: "16"

@@ -12,14 +12,14 @@ export interface GpsPoint {
 
 export type TrackingStatus = 'IDLE' | 'TRACKING' | 'PAUSED' | 'COMPLETED';
 
-// Haversine formula to calculate distance in meters between two lat/lon points
+// Haversine formula to compute great-circle distance in meters
 function calculateDistanceMeters(
   lat1: number,
   lon1: number,
   lat2: number,
   lon2: number
 ): number {
-  const R = 6371e3; // Earth radius in meters
+  const R = 6371e3; // Earth's mean radius in meters
   const phi1 = (lat1 * Math.PI) / 180;
   const phi2 = (lat2 * Math.PI) / 180;
   const deltaPhi = ((lat2 - lat1) * Math.PI) / 180;
@@ -45,12 +45,18 @@ export function useGpsTracker() {
   const [currentSpeedKmh, setCurrentSpeedKmh] = useState<number>(0);
   const [waypoints, setWaypoints] = useState<GpsPoint[]>([]);
 
+  // High-precision wall-clock timing refs (avoids setInterval throttling drift)
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const locationSubRef = useRef<Location.LocationSubscription | null>(null);
-  const startTimeRef = useRef<Date | null>(null);
-  const idempotencyKeyRef = useRef<string | null>(null);
+  const startTimeMsRef = useRef<number | null>(null);
+  const accumulatedPausedMsRef = useRef<number>(0);
+  const pauseStartMsRef = useRef<number | null>(null);
 
-  // Request location permission
+  const locationSubRef = useRef<Location.LocationSubscription | null>(null);
+  const idempotencyKeyRef = useRef<string | null>(null);
+  const isFirstFixAfterResumeRef = useRef<boolean>(false);
+  const lastPointRef = useRef<GpsPoint | null>(null);
+
+  // Request & verify location permission
   const checkPermission = useCallback(async (): Promise<boolean> => {
     try {
       const { status: existingStatus } = await Location.getForegroundPermissionsAsync();
@@ -64,7 +70,9 @@ export function useGpsTracker() {
       const granted = newStatus === 'granted';
       setPermissionGranted(granted);
       if (!granted) {
-        setPermissionError('Location permission denied. Please enable location access in settings to track activities.');
+        setPermissionError(
+          'Location permission denied. PaceTrack requires GPS access to record real workout distance, pace, and route.'
+        );
       } else {
         setPermissionError(null);
       }
@@ -77,12 +85,17 @@ export function useGpsTracker() {
     }
   }, []);
 
-  // Timer tick for stopwatch
+  // Wall-clock accurate timer
   useEffect(() => {
     if (status === 'TRACKING') {
       timerRef.current = setInterval(() => {
-        setElapsedSeconds((prev) => prev + 1);
-      }, 1000);
+        if (startTimeMsRef.current !== null) {
+          const now = Date.now();
+          const activeMs = now - startTimeMsRef.current - accumulatedPausedMsRef.current;
+          const secs = Math.max(0, Math.floor(activeMs / 1000));
+          setElapsedSeconds(secs);
+        }
+      }, 500); // 500ms sampling for crisp UI display
     } else {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -93,96 +106,130 @@ export function useGpsTracker() {
     return () => {
       if (timerRef.current) {
         clearInterval(timerRef.current);
+        timerRef.current = null;
       }
     };
   }, [status]);
 
-  // Clean up location subscription on unmount
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (locationSubRef.current) {
         locationSubRef.current.remove();
         locationSubRef.current = null;
       }
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
     };
   }, []);
+
+  // Internal helper to attach location listener
+  const attachLocationListener = async () => {
+    const sub = await Location.watchPositionAsync(
+      {
+        accuracy: Location.Accuracy.BestForNavigation,
+        distanceInterval: 4, // minimum 4 meters between fixes
+        timeInterval: 2000,  // minimum 2 seconds between updates
+      },
+      (loc) => {
+        // 1. Accuracy filter: discard low-precision fixes (> 30 meters)
+        if (loc.coords.accuracy && loc.coords.accuracy > 30) {
+          return;
+        }
+
+        const fixTime = loc.timestamp ? new Date(loc.timestamp) : new Date();
+        const rawSpeed = loc.coords.speed !== null && loc.coords.speed !== undefined ? loc.coords.speed : 0;
+        const sanitizedSpeed = rawSpeed > 0 ? rawSpeed : 0;
+
+        const newPoint: GpsPoint = {
+          latitude: loc.coords.latitude,
+          longitude: loc.coords.longitude,
+          altitude: loc.coords.altitude,
+          speedMps: sanitizedSpeed,
+          timestamp: fixTime.toISOString(),
+        };
+
+        // If this is the very first fix after resuming from pause, update position without jump distance
+        if (isFirstFixAfterResumeRef.current) {
+          isFirstFixAfterResumeRef.current = false;
+          lastPointRef.current = newPoint;
+          setWaypoints((prev) => [...prev, newPoint]);
+          return;
+        }
+
+        if (lastPointRef.current) {
+          const prevPoint = lastPointRef.current;
+          const deltaMeters = calculateDistanceMeters(
+            prevPoint.latitude,
+            prevPoint.longitude,
+            newPoint.latitude,
+            newPoint.longitude
+          );
+
+          const timeDeltaSeconds =
+            (new Date(newPoint.timestamp).getTime() - new Date(prevPoint.timestamp).getTime()) / 1000;
+
+          // 2. Velocity sanity check: discard superhuman jumps (> 14 m/s ≈ 50 km/h)
+          if (timeDeltaSeconds > 0 && deltaMeters / timeDeltaSeconds > 14) {
+            return;
+          }
+
+          // 3. Stationary jitter suppression: ignore microscopic movements < 2m when speed is near zero
+          const isJitter = deltaMeters < 2.0 && sanitizedSpeed < 0.4;
+
+          if (!isJitter && deltaMeters >= 1.5) {
+            setDistanceMeters((prevDist) => {
+              const newTotal = prevDist + deltaMeters;
+              // Recalculate pace using latest elapsed seconds
+              const distKm = newTotal / 1000;
+              if (distKm > 0.02) {
+                const nowSec = startTimeMsRef.current
+                  ? Math.floor((Date.now() - startTimeMsRef.current - accumulatedPausedMsRef.current) / 1000)
+                  : 1;
+                setCurrentPaceSecPerKm(nowSec / distKm);
+              }
+              return newTotal;
+            });
+          }
+        }
+
+        lastPointRef.current = newPoint;
+        setWaypoints((prev) => [...prev, newPoint]);
+        setCurrentSpeedKmh(sanitizedSpeed * 3.6);
+      }
+    );
+
+    return sub;
+  };
 
   // Start tracking
   const startTracking = async (type: ActivityType = 'RUNNING') => {
     const hasPerm = await checkPermission();
     if (!hasPerm) return;
 
-    // Reset state
+    // Reset state & timing refs
     setActivityType(type);
     setElapsedSeconds(0);
     setDistanceMeters(0);
     setCurrentPaceSecPerKm(0);
     setCurrentSpeedKmh(0);
     setWaypoints([]);
-    startTimeRef.current = new Date();
+    lastPointRef.current = null;
+    isFirstFixAfterResumeRef.current = false;
 
-    // Generate idempotency key
-    idempotencyKeyRef.current = `${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const now = Date.now();
+    startTimeMsRef.current = now;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartMsRef.current = null;
 
-    // Start location updates
+    // Generate unique idempotency key
+    idempotencyKeyRef.current = `act_${now}_${Math.random().toString(36).substring(2, 9)}`;
+
     try {
-      const subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          distanceInterval: 5, // update every 5 meters
-          timeInterval: 2000,  // or every 2 seconds
-        },
-        (loc) => {
-          // Reject inaccurate GPS fixes (> 35m) to avoid erratic spikes
-          if (loc.coords.accuracy && loc.coords.accuracy > 35) {
-            return;
-          }
-
-          const newPoint: GpsPoint = {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            altitude: loc.coords.altitude,
-            speedMps: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : 0,
-            timestamp: new Date(loc.timestamp).toISOString(),
-          };
-
-          setWaypoints((prev) => {
-            if (prev.length > 0) {
-              const last = prev[prev.length - 1];
-              const delta = calculateDistanceMeters(
-                last.latitude,
-                last.longitude,
-                newPoint.latitude,
-                newPoint.longitude
-              );
-
-              // Ignore minute jitter < 1m
-              if (delta >= 1) {
-                setDistanceMeters((d) => {
-                  const newDist = d + delta;
-                  // Update pace
-                  setElapsedSeconds((sec) => {
-                    const distKm = newDist / 1000;
-                    if (distKm > 0.01) {
-                      setCurrentPaceSecPerKm(sec / distKm);
-                    }
-                    return sec;
-                  });
-                  return newDist;
-                });
-              }
-            }
-
-            return [...prev, newPoint];
-          });
-
-          if (loc.coords.speed !== null && loc.coords.speed > 0) {
-            setCurrentSpeedKmh(loc.coords.speed * 3.6);
-          }
-        }
-      );
-
-      locationSubRef.current = subscription;
+      const sub = await attachLocationListener();
+      locationSubRef.current = sub;
       setStatus('TRACKING');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Failed to start GPS tracking';
@@ -194,10 +241,13 @@ export function useGpsTracker() {
   // Pause tracking
   const pauseTracking = () => {
     if (status !== 'TRACKING') return;
+
     if (locationSubRef.current) {
       locationSubRef.current.remove();
       locationSubRef.current = null;
     }
+
+    pauseStartMsRef.current = Date.now();
     setStatus('PAUSED');
   };
 
@@ -205,50 +255,24 @@ export function useGpsTracker() {
   const resumeTracking = async () => {
     if (status !== 'PAUSED') return;
 
+    if (pauseStartMsRef.current !== null) {
+      accumulatedPausedMsRef.current += Date.now() - pauseStartMsRef.current;
+      pauseStartMsRef.current = null;
+    }
+
+    // Flag that the next fix should not add jump distance
+    isFirstFixAfterResumeRef.current = true;
+
     try {
-      const subscription = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.High,
-          distanceInterval: 5,
-          timeInterval: 2000,
-        },
-        (loc) => {
-          if (loc.coords.accuracy && loc.coords.accuracy > 35) return;
-
-          const newPoint: GpsPoint = {
-            latitude: loc.coords.latitude,
-            longitude: loc.coords.longitude,
-            altitude: loc.coords.altitude,
-            speedMps: loc.coords.speed !== null && loc.coords.speed >= 0 ? loc.coords.speed : 0,
-            timestamp: new Date(loc.timestamp).toISOString(),
-          };
-
-          setWaypoints((prev) => {
-            if (prev.length > 0) {
-              const last = prev[prev.length - 1];
-              const delta = calculateDistanceMeters(
-                last.latitude,
-                last.longitude,
-                newPoint.latitude,
-                newPoint.longitude
-              );
-              if (delta >= 1) {
-                setDistanceMeters((d) => d + delta);
-              }
-            }
-            return [...prev, newPoint];
-          });
-        }
-      );
-
-      locationSubRef.current = subscription;
+      const sub = await attachLocationListener();
+      locationSubRef.current = sub;
       setStatus('TRACKING');
     } catch {
       setStatus('PAUSED');
     }
   };
 
-  // Stop tracking and prepare activity payload
+  // Stop tracking and prepare structured activity payload
   const stopTracking = (): CreateActivityInput | null => {
     if (locationSubRef.current) {
       locationSubRef.current.remove();
@@ -259,20 +283,31 @@ export function useGpsTracker() {
       timerRef.current = null;
     }
 
+    // Accumulate final pause duration if stopped while paused
+    if (pauseStartMsRef.current !== null) {
+      accumulatedPausedMsRef.current += Date.now() - pauseStartMsRef.current;
+      pauseStartMsRef.current = null;
+    }
+
     setStatus('COMPLETED');
 
     const endTime = new Date();
-    const startTime = startTimeRef.current || new Date(endTime.getTime() - elapsedSeconds * 1000);
+    const startTime = startTimeMsRef.current
+      ? new Date(startTimeMsRef.current)
+      : new Date(endTime.getTime() - elapsedSeconds * 1000);
 
     const title = `${activityType === 'RUNNING' ? 'Run' : 'Walk'} • ${new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+    // Realistic steps based on average human stride of 0.78m
+    const estimatedSteps = distanceMeters > 0 ? Math.round(distanceMeters / 0.78) : 0;
 
     return {
       activityType,
       title,
       startTime: startTime.toISOString(),
       endTime: endTime.toISOString(),
-      distanceMeters,
-      stepCount: Math.round(distanceMeters * 1.3), // realistic estimation of steps based on stride
+      distanceMeters: Math.round(distanceMeters * 10) / 10,
+      stepCount: estimatedSteps,
       privacyLevel: 'PRIVATE',
       idempotencyKey: idempotencyKeyRef.current || undefined,
       waypoints: waypoints.map((w) => ({
@@ -300,8 +335,12 @@ export function useGpsTracker() {
     setCurrentPaceSecPerKm(0);
     setCurrentSpeedKmh(0);
     setWaypoints([]);
-    startTimeRef.current = null;
+    lastPointRef.current = null;
+    startTimeMsRef.current = null;
+    accumulatedPausedMsRef.current = 0;
+    pauseStartMsRef.current = null;
     idempotencyKeyRef.current = null;
+    isFirstFixAfterResumeRef.current = false;
   };
 
   return {

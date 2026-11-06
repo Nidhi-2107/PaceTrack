@@ -85,3 +85,4 @@ export interface CreateGoalInput {
   goalType: string;
   targetValue: number;
 }
+

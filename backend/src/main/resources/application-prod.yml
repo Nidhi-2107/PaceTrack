@@ -1,0 +1,22 @@
+# PaceTrack Production Profile Configuration (Render / Cloud Deployment)
+spring:
+  jpa:
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+logging:
+  level:
+    root: INFO
+    com.pacetrack: INFO
+    org.springframework.web: WARN
+    org.springframework.security: WARN
+    org.hibernate: WARN
+
+management:
+  endpoint:
+    health:
+      show-details: never
+      probes:
+        enabled: true

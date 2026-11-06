@@ -15,7 +15,9 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
   const [isSyncing, setIsSyncing] = useState<boolean>(false);
 
   const lastSyncedStepsRef = useRef<number>(0);
+  const isSyncInProgressRef = useRef<boolean>(false);
   const subscriptionRef = useRef<Pedometer.Subscription | null>(null);
+  const baselineHistoricalStepsRef = useRef<number>(0);
 
   // Check hardware sensor availability and request permission
   const checkSensor = useCallback(async () => {
@@ -24,7 +26,8 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
       setIsAvailable(available);
 
       if (!available) {
-        setError('Pedometer hardware is not available on this device/simulator. Steps cannot be measured automatically.');
+        // Transparent disclosure: hardware not present (e.g. web browser, emulator)
+        setError('Physical step pedometer hardware is not available on this device.');
         return;
       }
 
@@ -33,7 +36,7 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
       setPermissionGranted(granted);
 
       if (!granted) {
-        setError('Motion & Fitness permission was denied. Enable permission in device settings to track steps.');
+        setError('Activity recognition permission was denied in device settings.');
         return;
       }
 
@@ -46,19 +49,30 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
 
       try {
         const pastStepResult = await Pedometer.getStepCountAsync(startOfDay, endOfDay);
-        if (pastStepResult) {
+        if (pastStepResult && typeof pastStepResult.steps === 'number') {
+          baselineHistoricalStepsRef.current = pastStepResult.steps;
           setStepCount(pastStepResult.steps);
         }
       } catch {
-        // Some devices don't support historical queries, but do support live updates
+        // Some Android devices do not support historical window queries
+        baselineHistoricalStepsRef.current = 0;
       }
 
-      // Subscribe to real-time live step updates
+      // Clean up previous subscription if any
+      if (subscriptionRef.current) {
+        subscriptionRef.current.remove();
+        subscriptionRef.current = null;
+      }
+
+      // Subscribe to real-time live step counter events
       subscriptionRef.current = Pedometer.watchStepCount((result) => {
-        setStepCount((prev) => prev + result.steps);
+        setStepCount((prev) => {
+          const newTotal = prev + result.steps;
+          return newTotal;
+        });
       });
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Error accessing pedometer';
+      const msg = err instanceof Error ? err.message : 'Error accessing motion pedometer';
       setError(msg);
       setIsAvailable(false);
     }
@@ -75,18 +89,25 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
     };
   }, [checkSensor]);
 
-  // Sync to backend periodically or when user initiates
+  // Sync to backend with debounce and race-condition guards
   const syncToBackend = useCallback(
     async (currentStepsOverride?: number) => {
       if (!token) return;
       const count = currentStepsOverride !== undefined ? currentStepsOverride : stepCount;
+
+      // Avoid redundant API calls if steps haven't changed since last sync
+      if (count === lastSyncedStepsRef.current && count > 0) return;
       if (count <= 0 && lastSyncedStepsRef.current === 0) return;
 
+      // Prevent concurrent sync requests
+      if (isSyncInProgressRef.current) return;
+      isSyncInProgressRef.current = true;
       setIsSyncing(true);
+
       try {
         const todayStr = new Date().toISOString().split('T')[0];
-        // Standard average stride length approx 0.76 meters per step
-        const estimatedDistanceMeters = count * 0.76;
+        // Standard average stride length approx 0.76m
+        const estimatedDistanceMeters = Math.round(count * 0.76 * 10) / 10;
         // Standard average ~0.04 kcal per step
         const estimatedCalories = Math.round(count * 0.04);
 
@@ -99,9 +120,9 @@ export function usePedometer({ token, autoSyncIntervalMs = 60000 }: UsePedometer
 
         lastSyncedStepsRef.current = count;
       } catch (err: unknown) {
-        // Silently log or handle sync error
-        console.warn('Step sync failed:', err);
+        console.warn('Pedometer sync warning:', err);
       } finally {
+        isSyncInProgressRef.current = false;
         setIsSyncing(false);
       }
     },

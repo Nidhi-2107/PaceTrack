@@ -147,3 +147,4 @@ try {
     Write-Host ">>> Stopping Spring Boot process..."
     Stop-Process -Id $proc.Id -Force
 }
+

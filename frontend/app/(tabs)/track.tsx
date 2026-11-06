@@ -27,6 +27,7 @@ export default function TrackScreen() {
   );
   const [isSaving, setIsSaving] = useState<boolean>(false);
   const [saveSuccessMessage, setSaveSuccessMessage] = useState<string | null>(null);
+  const [failedActivityInput, setFailedActivityInput] = useState<any | null>(null);
 
   const {
     status,
@@ -75,14 +76,15 @@ export default function TrackScreen() {
   const distanceKm = (distanceMeters / 1000).toFixed(2);
 
   // Stop activity & save to backend
-  const handleStopAndSave = async () => {
-    const activityInput = stopTracking();
+  const handleStopAndSave = async (overrideInput?: any) => {
+    const activityInput = overrideInput || stopTracking();
     if (!activityInput) return;
 
     if (!token) {
+      setFailedActivityInput(activityInput);
       Alert.alert(
         'Sign In Required',
-        'You need to sign in to save your activity history to the PaceTrack cloud.',
+        'You need to sign in to sync workout data to PaceTrack Cloud. Your recorded points are safe in memory.',
         [{ text: 'OK' }]
       );
       return;
@@ -93,14 +95,16 @@ export default function TrackScreen() {
 
     try {
       const saved = await createActivityApi(token, activityInput);
+      setFailedActivityInput(null);
       setSaveSuccessMessage(`Workout saved! ${saved.title} (${(saved.distanceMeters / 1000).toFixed(2)} km)`);
       setTimeout(() => {
         resetTracker();
         router.push('/(tabs)/history');
       }, 1500);
     } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : 'Failed to save activity';
-      Alert.alert('Save Error', msg);
+      setFailedActivityInput(activityInput);
+      const msg = err instanceof Error ? err.message : 'Failed to save activity to backend';
+      Alert.alert('Cloud Save Failed', `${msg}. Your GPS data is preserved. Tap Retry to submit again.`);
     } finally {
       setIsSaving(false);
     }
@@ -152,7 +156,7 @@ export default function TrackScreen() {
         <View style={styles.foregroundNotice}>
           <Text style={styles.noticeIcon}>⚡</Text>
           <Text style={styles.noticeText}>
-            Foreground GPS Mode. Keep screen active while tracking to ensure uninterrupted GPS coordinate logging.
+            FOREGROUND GPS ONLY: Please keep your device screen awake while tracking. Background location updates are not active to protect battery.
           </Text>
         </View>
 
@@ -198,6 +202,21 @@ export default function TrackScreen() {
           <View style={styles.successBanner}>
             <Text style={styles.successBannerText}>✓ {saveSuccessMessage}</Text>
           </View>
+        )}
+
+        {/* Retry button on save failure */}
+        {failedActivityInput && (
+          <TouchableOpacity
+            style={[styles.startBtn, { backgroundColor: Colors.warning, marginBottom: 10 }]}
+            onPress={() => handleStopAndSave(failedActivityInput)}
+            disabled={isSaving}
+          >
+            {isSaving ? (
+              <ActivityIndicator color={Colors.forestDeep} />
+            ) : (
+              <Text style={styles.startBtnText}>RETRY SAVING WORKOUT</Text>
+            )}
+          </TouchableOpacity>
         )}
 
         {/* Control Buttons */}
@@ -520,3 +539,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+
