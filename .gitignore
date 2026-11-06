@@ -1,0 +1,41 @@
+# PaceTrack Git Ignore
+
+# OS generated
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Environment variables & local secrets
+.env
+.env.local
+.env.*.local
+
+# Backend / Maven / Java
+backend/target/
+backend/.mvn/wrapper/maven-wrapper.jar
+backend/*.log
+backend/.flattened-pom.xml
+
+# Frontend / Node / Expo / React Native
+frontend/node_modules/
+frontend/.expo/
+frontend/dist/
+frontend/web-build/
+frontend/*.log
+frontend/npm-debug.log*
+frontend/yarn-debug.log*
+frontend/yarn-error.log*
+frontend/.pnpm-debug.log*
+
+# IDEs & Editors
+.idea/
+.vscode/
+*.iml
+*.ipr
+*.iws
+.project
+.classpath
+.settings/
+
+# Docker volumes & local data
+postgres_data/
