@@ -70,3 +70,4 @@ export async function fetchCurrentUserApi(token: string): Promise<User> {
 
   return handleResponse<User>(res);
 }
+

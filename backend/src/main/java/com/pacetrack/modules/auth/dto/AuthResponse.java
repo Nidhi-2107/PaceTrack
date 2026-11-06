@@ -12,3 +12,4 @@ public record AuthResponse(
         return new AuthResponse(token, "Bearer", expiresInMs, user);
     }
 }
+

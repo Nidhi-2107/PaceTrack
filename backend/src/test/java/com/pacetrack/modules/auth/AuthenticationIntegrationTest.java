@@ -234,3 +234,4 @@ class AuthenticationIntegrationTest {
                 .andExpect(jsonPath("$.data.id").isString());
     }
 }
+

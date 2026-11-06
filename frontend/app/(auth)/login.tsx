@@ -44,7 +44,7 @@ export default function LoginScreen() {
         email: email.trim().toLowerCase(),
         password,
       });
-      router.replace('/');
+      router.replace('/(tabs)');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Invalid email or password';
       setErrorMessage(msg);
@@ -250,3 +250,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+

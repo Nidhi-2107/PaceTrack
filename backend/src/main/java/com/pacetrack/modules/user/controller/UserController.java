@@ -26,3 +26,4 @@ public class UserController {
         return ResponseEntity.ok(ApiResponse.success(response, "User profile retrieved successfully"));
     }
 }
+

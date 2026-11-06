@@ -65,7 +65,7 @@ export default function RegisterScreen() {
         email: email.trim().toLowerCase(),
         password,
       });
-      router.replace('/');
+      router.replace('/(tabs)');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Registration failed';
       setErrorMessage(msg);
@@ -317,3 +317,4 @@ const styles = StyleSheet.create({
     fontWeight: '700',
   },
 });
+
