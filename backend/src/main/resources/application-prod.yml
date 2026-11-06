@@ -20,3 +20,4 @@ management:
       show-details: never
       probes:
         enabled: true
+
